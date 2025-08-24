@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { PlusCircle, DollarSign, TrendingUp, TrendingDown, Wallet, Target, Calendar, Eye, EyeOff, Upload, FileText, Download, Edit2, Save, X, Plus, Minus, Search } from 'lucide-react';
+import { PlusCircle, DollarSign, TrendingUp, TrendingDown, Target, Calendar, Eye, EyeOff, Upload, Download, Edit2, X, Plus, Minus, Search } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar } from 'recharts';
 import Papa from 'papaparse';
 
@@ -324,18 +324,6 @@ const WealthWise = () => {
     const targetDate = new Date();
     targetDate.setMonth(targetDate.getMonth() + months);
     return targetDate.toLocaleDateString();
-  };
-
-  // Fetch current price helper
-  const fetchCurrentPrice = async (symbol) => {
-    try {
-      const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${FINNHUB_API_KEY}`);
-      const data = await res.json();
-      return data.c || 0;
-    } catch (error) {
-      console.error('Error fetching current price:', error);
-      return 0;
-    }
   };
 
   // Calculations
