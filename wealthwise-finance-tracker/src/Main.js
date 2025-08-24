@@ -1,27 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import Select from 'react-select';
 import { PlusCircle, DollarSign, TrendingUp, TrendingDown, Wallet, Target, Calendar, Eye, EyeOff } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar } from 'recharts';
 
+// Finnhub API key (replace with your own for production)
+const FINNHUB_API_KEY = 'd2la8b1r01qqq9qu4pm0d2la8b1r01qqq9qu4pmg';
+
 const WealthWise = () => {
   // State management
-  const [transactions, setTransactions] = useState([
-    { id: 1, type: 'income', category: 'Salary', amount: 3500, description: 'Monthly salary', date: '2025-08-01' },
-    { id: 2, type: 'expense', category: 'Food', amount: 450, description: 'Groceries', date: '2025-08-15' },
-    { id: 3, type: 'expense', category: 'Transportation', amount: 120, description: 'Gas', date: '2025-08-10' }
-  ]);
-  
-  const [investments, setInvestments] = useState([
-    { id: 1, symbol: 'AAPL', shares: 10, buyPrice: 150, currentPrice: 175, name: 'Apple Inc.' },
-    { id: 2, symbol: 'GOOGL', shares: 5, buyPrice: 2500, currentPrice: 2650, name: 'Alphabet Inc.' },
-    { id: 3, symbol: 'TSLA', shares: 8, buyPrice: 200, currentPrice: 185, name: 'Tesla Inc.' }
-  ]);
-  
-  const [goals, setGoals] = useState([
-    { id: 1, name: 'Emergency Fund', target: 10000, current: 3500, category: 'savings' },
-    { id: 2, name: 'New Car', target: 25000, current: 8200, category: 'purchase' },
-    { id: 3, name: 'Vacation', target: 5000, current: 1200, category: 'lifestyle' }
-  ]);
-  
+  const [transactions, setTransactions] = useState([]);
+  const [investments, setInvestments] = useState([]);
+  const [goals, setGoals] = useState([]);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [showBalance, setShowBalance] = useState(true);
   const [newTransaction, setNewTransaction] = useState({
@@ -31,7 +20,6 @@ const WealthWise = () => {
     description: '',
     date: new Date().toISOString().split('T')[0]
   });
-  
   const [newInvestment, setNewInvestment] = useState({
     symbol: '',
     shares: '',
@@ -39,7 +27,6 @@ const WealthWise = () => {
     currentPrice: '',
     name: ''
   });
-  
   const [newGoal, setNewGoal] = useState({
     name: '',
     target: '',
@@ -47,57 +34,162 @@ const WealthWise = () => {
     category: 'savings'
   });
 
-  // Calculations
+  // For react-select symbol search
+  const [symbolOptions, setSymbolOptions] = useState([]);
+  const [isLoadingSymbols, setIsLoadingSymbols] = useState(false);
+  const searchTimeout = useRef(null);
+
+  // For live price updates
+  const [liveBuyPrice, setLiveBuyPrice] = useState('');
+  const [liveCurrentPrice, setLiveCurrentPrice] = useState('');
+  const priceIntervalRef = useRef(null);
+
+  // Debounced Finnhub symbol search
+  const handleSymbolInputChange = (inputValue, { action }) => {
+    if (action !== 'input-change') return;
+    if (searchTimeout.current) clearTimeout(searchTimeout.current);
+
+    if (!inputValue) {
+      setSymbolOptions([]);
+      return;
+    }
+
+    setIsLoadingSymbols(true);
+    searchTimeout.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`https://finnhub.io/api/v1/search?q=${inputValue}&token=${FINNHUB_API_KEY}`);
+        const data = await res.json();
+        if (data.result) {
+          setSymbolOptions(
+            data.result
+              .filter(item => ['Common Stock', 'ETF'].includes(item.type))
+              .map(item => ({
+                value: item.symbol,
+                label: `${item.symbol} - ${item.description}`,
+                name: item.description
+              }))
+          );
+        } else {
+          setSymbolOptions([]);
+        }
+      } catch {
+        setSymbolOptions([]);
+      }
+      setIsLoadingSymbols(false);
+    }, 400); // 400ms debounce
+  };
+
+  // When a symbol is selected, fill symbol and name
+  const handleSymbolSelect = (selected) => {
+    if (selected) {
+      setNewInvestment({
+        ...newInvestment,
+        symbol: selected.value,
+        name: selected.name
+      });
+    } else {
+      setNewInvestment({
+        ...newInvestment,
+        symbol: '',
+        name: ''
+      });
+    }
+  };
+
+  // Finnhub price fetch helper
+  const fetchCurrentPrice = async (symbol) => {
+    try {
+      const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${FINNHUB_API_KEY}`);
+      const data = await res.json();
+      return data.c || 0; // 'c' is the current price
+    } catch (error) {
+      console.error('Error fetching current price:', error);
+      return 0;
+    }
+  };
+
+  // Calculations (reordered for correct variable usage)
   const totalIncome = transactions
     .filter(t => t.type === 'income')
     .reduce((sum, t) => sum + t.amount, 0);
-  
+
   const totalExpenses = transactions
     .filter(t => t.type === 'expense')
     .reduce((sum, t) => sum + t.amount, 0);
-  
-  const netWorth = totalIncome - totalExpenses;
-  
-  const portfolioValue = investments.reduce((sum, inv) => 
+
+  const portfolioValue = investments.reduce((sum, inv) =>
     sum + (inv.shares * inv.currentPrice), 0);
-  
-  const portfolioGainLoss = investments.reduce((sum, inv) => 
+
+  const portfolioGainLoss = investments.reduce((sum, inv) =>
     sum + (inv.shares * (inv.currentPrice - inv.buyPrice)), 0);
-  
-  const portfolioPercentage = portfolioValue > 0 ? 
+
+  const portfolioPercentage = portfolioValue > 0 ?
     ((portfolioGainLoss / (portfolioValue - portfolioGainLoss)) * 100) : 0;
 
+  const netWorth = totalIncome - totalExpenses + portfolioValue;
+
   // Chart data
-  const monthlyData = [
-    { month: 'Jan', income: 3500, expenses: 2800 },
-    { month: 'Feb', income: 3500, expenses: 3200 },
-    { month: 'Mar', income: 3800, expenses: 2900 },
-    { month: 'Apr', income: 3500, expenses: 3100 },
-    { month: 'May', income: 3700, expenses: 2700 },
-    { month: 'Jun', income: 3500, expenses: 3000 },
-    { month: 'Jul', income: 3600, expenses: 2800 },
-    { month: 'Aug', income: 3500, expenses: 2950 }
-  ];
+  const getMonthName = (dateStr) => {
+    const date = new Date(dateStr);
+    return date.toLocaleString('default', { month: 'short' });
+  };
+
+  const months = Array.from({ length: 8 }, (_, i) => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - (7 - i));
+    return d.toISOString().split('T')[0].slice(0, 7); // 'YYYY-MM'
+  });
+
+  const monthlyData = months.map((monthStr, idx) => {
+    const monthName = new Date(`${monthStr}-01`).toLocaleString('default', { month: 'short' });
+    const income = transactions
+      .filter(t => t.type === 'income' && t.date.startsWith(monthStr))
+      .reduce((sum, t) => sum + t.amount, 0);
+    const expenses = transactions
+      .filter(t => t.type === 'expense' && t.date.startsWith(monthStr))
+      .reduce((sum, t) => sum + t.amount, 0);
+    return { month: monthName, income, expenses };
+  });
 
   const expenseCategories = [
-    { name: 'Food', value: 450, color: '#FF6B6B' },
-    { name: 'Transportation', value: 120, color: '#4ECDC4' },
-    { name: 'Entertainment', value: 200, color: '#45B7D1' },
-    { name: 'Utilities', value: 150, color: '#96CEB4' },
-    { name: 'Healthcare', value: 80, color: '#FFEAA7' }
+    { name: 'Food', color: '#FF6B6B' },
+    { name: 'Transportation', color: '#4ECDC4' },
+    { name: 'Entertainment', color: '#45B7D1' },
+    { name: 'Utilities', color: '#96CEB4' },
+    { name: 'Healthcare', color: '#FFEAA7' }
+  ].map(cat => ({
+    ...cat,
+    value: transactions
+      .filter(t => t.type === 'expense' && t.category === cat.name)
+      .reduce((sum, t) => sum + t.amount, 0)
+  })).filter(cat => cat.value > 0);
+
+  const expenseCategoriesList = [
+    'Food',
+    'Transportation',
+    'Entertainment',
+    'Utilities',
+    'Healthcare'
+  ];
+  const incomeCategoriesList = [
+    'Salary',
+    'Business',
+    'Investments',
+    'Gifts',
+    'Other'
   ];
 
   // Event handlers
   const addTransaction = (e) => {
     e.preventDefault();
     if (!newTransaction.category || !newTransaction.amount) return;
-    
+
     const transaction = {
       id: Date.now(),
       ...newTransaction,
-      amount: parseFloat(newTransaction.amount)
+      amount: parseFloat(newTransaction.amount) || 0
     };
-    
+
     setTransactions([transaction, ...transactions]);
     setNewTransaction({
       type: 'expense',
@@ -108,18 +200,23 @@ const WealthWise = () => {
     });
   };
 
-  const addInvestment = (e) => {
+  // Update addInvestment to use live prices
+  const addInvestment = async (e) => {
     e.preventDefault();
-    if (!newInvestment.symbol || !newInvestment.shares || !newInvestment.buyPrice) return;
-    
+    if (!newInvestment.symbol || !newInvestment.shares) return;
+
+    // Fetch live price from Finnhub
+    const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${newInvestment.symbol}&token=${FINNHUB_API_KEY}`);
+    const data = await res.json();
+
     const investment = {
       id: Date.now(),
       ...newInvestment,
-      shares: parseFloat(newInvestment.shares),
-      buyPrice: parseFloat(newInvestment.buyPrice),
-      currentPrice: parseFloat(newInvestment.currentPrice) || parseFloat(newInvestment.buyPrice)
+      shares: parseFloat(newInvestment.shares) || 0,
+      buyPrice: data.o || 0, // open price as buy price
+      currentPrice: data.c || 0, // current price
     };
-    
+
     setInvestments([...investments, investment]);
     setNewInvestment({
       symbol: '',
@@ -128,19 +225,21 @@ const WealthWise = () => {
       currentPrice: '',
       name: ''
     });
+    setLiveBuyPrice('');
+    setLiveCurrentPrice('');
   };
 
   const addGoal = (e) => {
     e.preventDefault();
     if (!newGoal.name || !newGoal.target) return;
-    
+
     const goal = {
       id: Date.now(),
       ...newGoal,
-      target: parseFloat(newGoal.target),
+      target: parseFloat(newGoal.target) || 0,
       current: parseFloat(newGoal.current) || 0
     };
-    
+
     setGoals([...goals, goal]);
     setNewGoal({
       name: '',
@@ -148,6 +247,18 @@ const WealthWise = () => {
       current: '',
       category: 'savings'
     });
+  };
+
+  const removeTransaction = (id) => {
+    setTransactions(transactions.filter(t => t.id !== id));
+  };
+
+  const removeInvestment = (id) => {
+    setInvestments(investments.filter(inv => inv.id !== id));
+  };
+
+  const removeGoal = (id) => {
+    setGoals(goals.filter(goal => goal.id !== id));
   };
 
   const TabButton = ({ tab, label, isActive, onClick }) => (
@@ -163,33 +274,80 @@ const WealthWise = () => {
     </button>
   );
 
-  const StatCard = ({ icon: Icon, title, value, trend, color = 'blue' }) => (
-    <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-gray-600 text-sm font-medium">{title}</p>
-          <p className={`text-2xl font-bold text-${color}-600 mt-1`}>
-            {typeof value === 'number' ? `$${value.toLocaleString()}` : value}
-          </p>
+  const colorMap = {
+    blue: {
+      text: "text-blue-600",
+      bg: "bg-blue-50",
+    },
+    green: {
+      text: "text-green-600",
+      bg: "bg-green-50",
+    },
+    red: {
+      text: "text-red-600",
+      bg: "bg-red-50",
+    },
+    purple: {
+      text: "text-purple-600",
+      bg: "bg-purple-50",
+    },
+  };
+
+  const StatCard = ({ icon: Icon, title, value, trend, color = 'blue' }) => {
+    const colors = colorMap[color] || colorMap.blue;
+    return (
+      <div className="bg-white rounded-xl p-6 shadow-lg border border-gray-100">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-gray-600 text-sm font-medium">{title}</p>
+            <p className={`text-2xl font-bold ${colors.text} mt-1`}>
+              {typeof value === 'number' ? `$${value.toLocaleString()}` : value}
+            </p>
+          </div>
+          <div className={`p-3 rounded-lg ${colors.bg}`}>
+            <Icon className={`w-6 h-6 ${colors.text}`} />
+          </div>
         </div>
-        <div className={`p-3 rounded-lg bg-${color}-50`}>
-          <Icon className={`w-6 h-6 text-${color}-600`} />
-        </div>
+        {trend && (
+          <div className="flex items-center mt-3">
+            {trend > 0 ? (
+              <TrendingUp className="w-4 h-4 text-green-500 mr-1" />
+            ) : (
+              <TrendingDown className="w-4 h-4 text-red-500 mr-1" />
+            )}
+            <span className={`text-sm ${trend > 0 ? 'text-green-500' : 'text-red-500'}`}>
+              {Math.abs(trend)}%
+            </span>
+          </div>
+        )}
       </div>
-      {trend && (
-        <div className="flex items-center mt-3">
-          {trend > 0 ? (
-            <TrendingUp className="w-4 h-4 text-green-500 mr-1" />
-          ) : (
-            <TrendingDown className="w-4 h-4 text-red-500 mr-1" />
-          )}
-          <span className={`text-sm ${trend > 0 ? 'text-green-500' : 'text-red-500'}`}>
-            {Math.abs(trend)}%
-          </span>
-        </div>
-      )}
-    </div>
-  );
+    );
+  };
+
+  // Fetch live prices for selected symbol
+  useEffect(() => {
+    // Only fetch if symbol and shares are set
+    if (!newInvestment.symbol || !newInvestment.shares) {
+      setLiveBuyPrice('');
+      setLiveCurrentPrice('');
+      if (priceIntervalRef.current) clearInterval(priceIntervalRef.current);
+      return;
+    }
+
+    const fetchPrices = async () => {
+      const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${newInvestment.symbol}&token=${FINNHUB_API_KEY}`);
+      const data = await res.json();
+      setLiveBuyPrice(data.o ? (parseFloat(data.o) * parseFloat(newInvestment.shares)).toFixed(2) : '');
+      setLiveCurrentPrice(data.c ? (parseFloat(data.c) * parseFloat(newInvestment.shares)).toFixed(2) : '');
+    };
+
+    fetchPrices();
+    priceIntervalRef.current = setInterval(fetchPrices, 10000); // update every 10s
+
+    return () => {
+      if (priceIntervalRef.current) clearInterval(priceIntervalRef.current);
+    };
+  }, [newInvestment.symbol, newInvestment.shares]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
@@ -380,20 +538,23 @@ const WealthWise = () => {
               <form onSubmit={addTransaction} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                 <select
                   value={newTransaction.type}
-                  onChange={(e) => setNewTransaction({...newTransaction, type: e.target.value})}
-                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  onChange={(e) => setNewTransaction({...newTransaction, type: e.target.value, category: ''})}
+                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300 ease-in-out"
                 >
                   <option value="expense">Expense</option>
                   <option value="income">Income</option>
                 </select>
                 
-                <input
-                  type="text"
-                  placeholder="Category"
+                <select
                   value={newTransaction.category}
                   onChange={(e) => setNewTransaction({...newTransaction, category: e.target.value})}
-                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300 ease-in-out"
+                >
+                  <option value="">Select Category</option>
+                  {(newTransaction.type === 'expense' ? expenseCategoriesList : incomeCategoriesList).map((cat) => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
                 
                 <input
                   type="number"
@@ -401,7 +562,7 @@ const WealthWise = () => {
                   step="0.01"
                   value={newTransaction.amount}
                   onChange={(e) => setNewTransaction({...newTransaction, amount: e.target.value})}
-                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300 ease-in-out"
                 />
                 
                 <input
@@ -409,12 +570,13 @@ const WealthWise = () => {
                   placeholder="Description"
                   value={newTransaction.description}
                   onChange={(e) => setNewTransaction({...newTransaction, description: e.target.value})}
-                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300 ease-in-out"
                 />
                 
                 <button
                   type="submit"
-                  className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center space-x-2"
+                  disabled={!newTransaction.category || !newTransaction.amount}
+                  className={`px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center space-x-2 ${(!newTransaction.category || !newTransaction.amount) ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                   <PlusCircle className="w-4 h-4" />
                   <span>Add</span>
@@ -450,6 +612,12 @@ const WealthWise = () => {
                       </p>
                       <p className="text-sm text-gray-500 capitalize">{transaction.type}</p>
                     </div>
+                    <button
+                      onClick={() => removeTransaction(transaction.id)}
+                      className="ml-4 px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 text-sm"
+                    >
+                      Remove
+                    </button>
                   </div>
                 ))}
               </div>
@@ -484,49 +652,55 @@ const WealthWise = () => {
             <div className="bg-white rounded-xl p-6 shadow-lg">
               <h3 className="text-lg font-semibold mb-4">Add New Investment</h3>
               <form onSubmit={addInvestment} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
-                <input
-                  type="text"
-                  placeholder="Symbol (e.g., AAPL)"
-                  value={newInvestment.symbol}
-                  onChange={(e) => setNewInvestment({...newInvestment, symbol: e.target.value.toUpperCase()})}
-                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                {/* Symbol Search Dropdown */}
+                <Select
+                  aria-label="Stock Symbol Search"
+                  placeholder="Search Symbol"
+                  isClearable
+                  isLoading={isLoadingSymbols}
+                  options={symbolOptions}
+                  onInputChange={handleSymbolInputChange}
+                  onChange={handleSymbolSelect}
+                  className="react-select-container"
+                  classNamePrefix="react-select"
+                  value={
+                    newInvestment.symbol
+                      ? { value: newInvestment.symbol, label: `${newInvestment.symbol} - ${newInvestment.name}` }
+                      : null
+                  }
                 />
-                
+
+                {/* Company Name (auto-filled, read-only) */}
                 <input
                   type="text"
                   placeholder="Company Name"
                   value={newInvestment.name}
-                  onChange={(e) => setNewInvestment({...newInvestment, name: e.target.value})}
-                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  readOnly
+                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-100"
                 />
-                
+
                 <input
                   type="number"
                   placeholder="Shares"
                   step="0.01"
                   value={newInvestment.shares}
                   onChange={(e) => setNewInvestment({...newInvestment, shares: e.target.value})}
-                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300 ease-in-out"
                 />
-                
                 <input
                   type="number"
                   placeholder="Buy Price"
-                  step="0.01"
-                  value={newInvestment.buyPrice}
-                  onChange={(e) => setNewInvestment({...newInvestment, buyPrice: e.target.value})}
-                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  value={liveBuyPrice}
+                  disabled
+                  className="px-4 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-500"
                 />
-                
                 <input
                   type="number"
                   placeholder="Current Price"
-                  step="0.01"
-                  value={newInvestment.currentPrice}
-                  onChange={(e) => setNewInvestment({...newInvestment, currentPrice: e.target.value})}
-                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  value={liveCurrentPrice}
+                  disabled
+                  className="px-4 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-500"
                 />
-                
                 <button
                   type="submit"
                   className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center space-x-2"
@@ -546,24 +720,28 @@ const WealthWise = () => {
                   const gainLossPercent = ((investment.currentPrice - investment.buyPrice) / investment.buyPrice) * 100;
                   
                   return (
-                    <div key={investment.id} className="p-4 bg-gray-50 rounded-lg">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <h4 className="font-bold text-lg">{investment.symbol}</h4>
-                          <p className="text-gray-600">{investment.name}</p>
-                          <p className="text-sm text-gray-500">{investment.shares} shares</p>
-                        </div>
-                        
-                        <div className="text-right">
-                          <p className="text-lg font-semibold">${(investment.shares * investment.currentPrice).toLocaleString()}</p>
-                          <p className={`font-medium ${gainLoss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                            {gainLoss >= 0 ? '+' : ''}${gainLoss.toFixed(2)} ({gainLossPercent >= 0 ? '+' : ''}{gainLossPercent.toFixed(2)}%)
-                          </p>
-                          <p className="text-sm text-gray-500">
-                            ${investment.buyPrice} → ${investment.currentPrice}
-                          </p>
-                        </div>
+                    <div key={investment.id} className="p-4 bg-gray-50 rounded-lg flex justify-between items-center">
+                      <div>
+                        <h4 className="font-bold text-lg">{investment.symbol}</h4>
+                        <p className="text-gray-600">{investment.name}</p>
+                        <p className="text-sm text-gray-500">{investment.shares} shares</p>
                       </div>
+                      
+                      <div className="text-right">
+                        <p className="text-lg font-semibold">${(investment.shares * investment.currentPrice).toLocaleString()}</p>
+                        <p className={`font-medium ${gainLoss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {gainLoss >= 0 ? '+' : ''}${gainLoss.toFixed(2)} ({gainLossPercent >= 0 ? '+' : ''}{gainLossPercent.toFixed(2)}%)
+                        </p>
+                        <p className="text-sm text-gray-500">
+                          ${investment.buyPrice} → ${investment.currentPrice}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => removeInvestment(investment.id)}
+                        className="ml-4 px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 text-sm"
+                      >
+                        Remove
+                      </button>
                     </div>
                   );
                 })}
@@ -584,13 +762,13 @@ const WealthWise = () => {
                   placeholder="Goal Name"
                   value={newGoal.name}
                   onChange={(e) => setNewGoal({...newGoal, name: e.target.value})}
-                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300 ease-in-out"
                 />
                 
                 <select
                   value={newGoal.category}
                   onChange={(e) => setNewGoal({...newGoal, category: e.target.value})}
-                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300 ease-in-out"
                 >
                   <option value="savings">Savings</option>
                   <option value="purchase">Purchase</option>
@@ -604,7 +782,7 @@ const WealthWise = () => {
                   step="0.01"
                   value={newGoal.target}
                   onChange={(e) => setNewGoal({...newGoal, target: e.target.value})}
-                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300 ease-in-out"
                 />
                 
                 <input
@@ -613,7 +791,7 @@ const WealthWise = () => {
                   step="0.01"
                   value={newGoal.current}
                   onChange={(e) => setNewGoal({...newGoal, current: e.target.value})}
-                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300 ease-in-out"
                 />
                 
                 <button
@@ -633,7 +811,7 @@ const WealthWise = () => {
                 const remaining = goal.target - goal.current;
                 
                 return (
-                  <div key={goal.id} className="bg-white rounded-xl p-6 shadow-lg">
+                  <div key={goal.id} className="bg-white rounded-xl p-6 shadow-lg relative">
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="text-lg font-semibold">{goal.name}</h3>
                       <span className={`px-3 py-1 rounded-full text-xs font-medium ${
@@ -673,6 +851,12 @@ const WealthWise = () => {
                          'Just getting started'}
                       </span>
                     </div>
+                    <button
+                      onClick={() => removeGoal(goal.id)}
+                      className="absolute top-4 right-4 px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 text-sm"
+                    >
+                      Remove
+                    </button>
                   </div>
                 );
               })}
